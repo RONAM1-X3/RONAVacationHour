@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Employee Vacation Hours Forecaster</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 450px; margin: 40px auto; padding: 20px; background: #f9fafb; }
+    body { font-family: system-ui, sans-serif; max-width: 460px; margin: 40px auto; padding: 20px; background: #f9fafb; }
     .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
     label { display: block; margin-top: 14px; font-weight: 600; font-size: 14px; }
+    .hint { font-size: 12px; color: #6b7280; margin-top: 2px; }
     input { width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
     button { width: 100%; padding: 12px; margin-top: 20px; background: #2563eb; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
     button:hover { background: #1d4ed8; }
@@ -23,6 +24,10 @@
     <label for="hireDate">Employee Hire Date</label>
     <input type="date" id="hireDate">
 
+    <label for="anchorPayDate">Recent or Next Payday</label>
+    <div class="hint">Used to align the 14-day bi-weekly pay cycle</div>
+    <input type="date" id="anchorPayDate">
+
     <label for="currentHours">Current Vacation Balance (Hours)</label>
     <input type="number" id="currentHours" value="40" min="0" step="0.5">
 
@@ -32,56 +37,82 @@
     <label for="plannedUse">Planned Vacation Used Before Target Date (Hours)</label>
     <input type="number" id="plannedUse" value="0" min="0" step="0.5">
 
-    <p class="error" id="errorMsg">Please select a valid Hire Date and a Target Date in the future.</p>
+    <p class="error" id="errorMsg">Please select valid dates, with a Target Date in the future.</p>
 
     <button onclick="forecastVacation()">Calculate Forecast</button>
 
     <div class="result-box" id="output" style="display:none;">
-      <p><strong>Current Tenure:</strong> <span id="currentTenureDisplay">0</span> years</p>
+      <p><strong>Current Tenure:</strong> <span id="currentTenureDisplay">0</span> years (<span id="currentTierDisplay">0</span> hrs/yr)</p>
       <p><strong>Tenure on Target Date:</strong> <span id="futureTenureDisplay">0</span> years</p>
+      <p><strong>Bi-Weekly Paydays in Period:</strong> <span id="payPeriodsDisplay">0</span></p>
       <p><strong>Hours Earned in Period:</strong> <span id="earnedDisplay">0</span> hrs</p>
       <p style="font-size: 18px; margin-top: 10px;"><strong>Projected Balance:</strong> <span id="totalDisplay">0</span> hrs</p>
     </div>
   </div>
 
   <script>
-    // Set default dates on page load (Hire date: 2 years ago, Target date: 6 months from today)
+    function formatLocalDate(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function getExactTenureYears(hireDate, checkDate) {
+      let years = checkDate.getFullYear() - hireDate.getFullYear();
+      const monthDiff = checkDate.getMonth() - hireDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && checkDate.getDate() < hireDate.getDate())) {
+        years--;
+      }
+      return Math.max(0, years);
+    }
+
     window.onload = function() {
       const today = new Date();
       const twoYearsAgo = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate());
       const sixMonthsAhead = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
       
-      document.getElementById('hireDate').valueAsDate = twoYearsAgo;
-      document.getElementById('targetDate').valueAsDate = sixMonthsAhead;
+      // Default anchor payday to the most recent Friday
+      const daysSinceFriday = (today.getDay() + 2) % 7;
+      const lastFriday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysSinceFriday);
+
+      document.getElementById('hireDate').value = formatLocalDate(twoYearsAgo);
+      document.getElementById('anchorPayDate').value = formatLocalDate(lastFriday);
+      document.getElementById('targetDate').value = formatLocalDate(sixMonthsAhead);
     };
 
-    // CUSTOMIZE YOUR ANNUAL VACATION HOURS BY TENURE HERE
+    // BI-WEEKLY TENURE TIERS (26 pay periods per year)
     function getAnnualHours(tenureInYears) {
-      if (tenureInYears < 1) {
-        return 80;  // 2 weeks (80 hrs/year) for < 1 year
-      } else if (tenureInYears >= 1 && tenureInYears < 5) {
-        return 120; // 3 weeks (120 hrs/year) for 1 to 4.99 years
+      if (tenureInYears < 3) {
+        return 80;   // < 3 years
+      } else if (tenureInYears < 10) {
+        return 120;  // 3 to 9.99 years
+      } else if (tenureInYears < 20) {
+        return 160;  // 10 to 19.99 years
+      } else if (tenureInYears < 25) {
+        return 200;  // 20 to 24.99 years
       } else {
-        return 160; // 4 weeks (160 hrs/year) for 5+ years
+        return 240;  // 25+ years
       }
     }
 
     function forecastVacation() {
       const hireInput = document.getElementById('hireDate').value;
+      const anchorPayInput = document.getElementById('anchorPayDate').value;
       const targetInput = document.getElementById('targetDate').value;
       const currentHours = parseFloat(document.getElementById('currentHours').value) || 0;
       const plannedUse = parseFloat(document.getElementById('plannedUse').value) || 0;
       const errorMsg = document.getElementById('errorMsg');
 
-      if (!hireInput || !targetInput) {
+      if (!hireInput || !anchorPayInput || !targetInput) {
         errorMsg.style.display = 'block';
         return;
       }
 
-      // Normalize dates to midnight local time to avoid timezone shifts
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const hireDate = new Date(hireInput + 'T00:00:00');
+      const anchorPayDate = new Date(anchorPayInput + 'T00:00:00');
       const targetDate = new Date(targetInput + 'T00:00:00');
 
       if (targetDate <= today || targetDate <= hireDate) {
@@ -91,27 +122,41 @@
       }
       errorMsg.style.display = 'none';
 
-      // Calculate accrual day-by-day so mid-period anniversaries automatically bump up the rate
-      let totalEarned = 0;
-      const msPerDay = 1000 * 60 * 60 * 24;
-      const daysToForecast = Math.round((targetDate - today) / msPerDay);
-
-      for (let i = 1; i <= daysToForecast; i++) {
-        const simDate = new Date(today.getTime() + (i * msPerDay));
-        const tenureYearsOnDay = (simDate - hireDate) / (msPerDay * 365.25);
-        
-        if (tenureYearsOnDay >= 0) {
-          const annualAllowance = getAnnualHours(tenureYearsOnDay);
-          totalEarned += (annualAllowance / 365.25);
-        }
+      // Find the first payday strictly after today based on the 14-day anchor cycle
+      let nextPayday = new Date(anchorPayDate.getTime());
+      while (nextPayday <= today) {
+        nextPayday.setDate(nextPayday.getDate() + 14);
+      }
+      while (new Date(nextPayday.getFullYear(), nextPayday.getMonth(), nextPayday.getDate() - 14) > today) {
+        nextPayday.setDate(nextPayday.getDate() - 14);
       }
 
-      const currentTenure = Math.max(0, (today - hireDate) / (msPerDay * 365.25));
-      const futureTenure = (targetDate - hireDate) / (msPerDay * 365.25);
+      // Step through every bi-weekly payday up to and including the target date
+      let totalEarned = 0;
+      let payPeriodsCount = 0;
+      const PAY_PERIODS_PER_YEAR = 26;
+
+      let simPayday = new Date(nextPayday.getTime());
+      while (simPayday <= targetDate) {
+        if (simPayday >= hireDate) {
+          const tenureOnPayday = getExactTenureYears(hireDate, simPayday);
+          const annualAllowance = getAnnualHours(tenureOnPayday);
+          totalEarned += (annualAllowance / PAY_PERIODS_PER_YEAR);
+          payPeriodsCount++;
+        }
+        simPayday.setDate(simPayday.getDate() + 14);
+      }
+
+      const msPerYear = 1000 * 60 * 60 * 24 * 365.25;
+      const currentTenure = Math.max(0, (today - hireDate) / msPerYear);
+      const currentExactYears = getExactTenureYears(hireDate, today);
+      const futureTenure = (targetDate - hireDate) / msPerYear;
       const projectedTotal = currentHours + totalEarned - plannedUse;
 
       document.getElementById('currentTenureDisplay').innerText = currentTenure.toFixed(1);
+      document.getElementById('currentTierDisplay').innerText = getAnnualHours(currentExactYears);
       document.getElementById('futureTenureDisplay').innerText = futureTenure.toFixed(1);
+      document.getElementById('payPeriodsDisplay').innerText = payPeriodsCount;
       document.getElementById('earnedDisplay').innerText = totalEarned.toFixed(2);
       document.getElementById('totalDisplay').innerText = projectedTotal.toFixed(2);
       document.getElementById('output').style.display = 'block';
